@@ -26,6 +26,15 @@ async function main() {
   const supabase = createAdminClient()
   const manager  = new BaileysManager(supabase)
 
+  // ── Startup: limpar estados inconsistentes ─────────────────────────────────
+  // 'conectando' sem sessão real → desconectado; comandos stale → limpar
+  await supabase.from('conexoes')
+    .update({ status: 'desconectado', qr_code: null, comando: null })
+    .eq('status', 'conectando')
+  await supabase.from('conexoes')
+    .update({ comando: null })
+    .not('comando', 'is', null)
+
   // ── Baileys: restaurar sessões ──────────────────────────────────────────────
   logger.info('Restaurando sessões Baileys...')
   await manager.restaurarSessoes()
@@ -42,6 +51,7 @@ async function main() {
         else if (comando === 'desconectar') await manager.desconectar(conta_id)
       } catch (err) {
         logger.error({ conta_id, err }, 'Erro ao processar comando de conexão')
+      } finally {
         await supabase.from('conexoes').update({ comando: null }).eq('conta_id', conta_id)
       }
     })
