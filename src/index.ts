@@ -19,7 +19,7 @@ const WA_POLL_INTERVAL_MS    = 15_000            // 15s entre ciclos do worker W
 const EMAIL_POLL_INTERVAL_MS = 15_000            // 15s entre ciclos do worker e-mail
 
 async function main() {
-  logger.info('Quita Worker iniciando...')
+  logger.info('Cobranx Worker iniciando...')
 
   const supabase = createAdminClient()
   const manager  = new BaileysManager(supabase)

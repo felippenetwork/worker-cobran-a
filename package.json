@@ -1,8 +1,8 @@
 {
-  "name": "quita-worker",
+  "name": "cobranx-worker",
   "version": "0.1.0",
   "private": true,
-  "description": "Worker Baileys para o Quita — roda no VPS Vortexus, nunca na Vercel.",
+  "description": "Worker Baileys para o Cobranx — roda no VPS Vortexus, nunca na Vercel.",
   "type": "module",
   "scripts": {
     "dev":   "tsx watch src/index.ts",
