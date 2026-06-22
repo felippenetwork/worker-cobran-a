@@ -18,6 +18,7 @@ const logger = pino({ level: process.env.LOG_LEVEL ?? 'warn' })
 const SCHEDULER_INTERVAL_MS  = 60 * 60 * 1000   // 1h entre execuções do scheduler
 const WA_POLL_INTERVAL_MS    = 15_000            // 15s entre ciclos do worker WA
 const EMAIL_POLL_INTERVAL_MS = 15_000            // 15s entre ciclos do worker e-mail
+const CMD_POLL_INTERVAL_MS   = 10_000            // 10s entre verificações de comandos pendentes
 
 async function main() {
   logger.info('Cobranx Worker iniciando...')
@@ -55,6 +56,35 @@ async function main() {
   await executarScheduler()
   setInterval(executarScheduler, SCHEDULER_INTERVAL_MS)
 
+  // ── Polling de comandos: fallback para quando o Realtime falha ────────────────
+  const loopComandos = async () => {
+    while (true) {
+      await sleep(CMD_POLL_INTERVAL_MS)
+      try {
+        const { data: pendentes } = await supabase
+          .from('conexoes')
+          .select('conta_id, comando')
+          .not('comando', 'is', null)
+
+        for (const row of pendentes ?? []) {
+          const contaId = row.conta_id as string
+          const comando = row.comando as string
+          logger.info({ contaId, comando }, 'Comando detectado via polling')
+          try {
+            if (comando === 'reconectar') await manager.reconectar(contaId)
+            else if (comando === 'desconectar') await manager.desconectar(contaId)
+          } catch (err) {
+            logger.error({ contaId, err }, 'Erro ao processar comando (polling)')
+          } finally {
+            await supabase.from('conexoes').update({ comando: null }).eq('conta_id', contaId)
+          }
+        }
+      } catch (err) {
+        logger.error({ err }, 'Polling de comandos: erro')
+      }
+    }
+  }
+
   // ── Worker WhatsApp: polling a cada 15s ─────────────────────────────────────
   const loopWhatsApp = async () => {
     while (true) {
@@ -73,6 +103,7 @@ async function main() {
     }
   }
 
+  loopComandos()
   loopWhatsApp()
   loopEmail()
 
