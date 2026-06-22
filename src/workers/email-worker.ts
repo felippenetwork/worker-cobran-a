@@ -14,7 +14,7 @@ import type { SupabaseAdmin } from '../supabase.js'
 const logger = pino({ level: process.env.LOG_LEVEL ?? 'warn' })
 const resend  = new Resend(process.env.RESEND_API_KEY)
 
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'
+const SITE_URL = process.env.SITE_URL ?? process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'
 
 export async function processarFilaEmail(supabase: SupabaseAdmin) {
   if (!dentroDaJanela()) return

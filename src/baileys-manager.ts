@@ -261,6 +261,11 @@ export class BaileysManager {
     return Date.now() >= pronto
   }
 
+  /** Retorna quantas contas têm socket ativo (independente de warmup). */
+  contasConectadas(): number {
+    return this.sockets.size
+  }
+
   /** Apenas verifica existência do socket, sem checar warmup (uso interno). */
   private socketAtivo(contaId: string): boolean {
     return this.sockets.has(contaId)

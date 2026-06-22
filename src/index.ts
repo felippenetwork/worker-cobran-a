@@ -3,6 +3,7 @@
 // Sprint 8: scheduler de notificações + workers WhatsApp e E-mail.
 
 import 'dotenv/config'
+import { createServer } from 'http'
 import pino from 'pino'
 import { createAdminClient } from './supabase.js'
 import { BaileysManager } from './baileys-manager.js'
@@ -75,7 +76,23 @@ async function main() {
   loopWhatsApp()
   loopEmail()
 
-  logger.info('Worker pronto.')
+  // ── Health check HTTP ───────────────────────────────────────────────────────
+  const healthPort = parseInt(process.env.HEALTH_PORT ?? '3001')
+  createServer((req, res) => {
+    if (req.url === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        status:            'ok',
+        contas_conectadas: manager.contasConectadas(),
+        uptime_s:          Math.floor(process.uptime()),
+      }))
+    } else {
+      res.writeHead(404)
+      res.end()
+    }
+  }).listen(healthPort)
+
+  logger.info({ healthPort }, 'Worker pronto.')
 
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, () => { logger.info(`${signal} — encerrando.`); process.exit(0) })
