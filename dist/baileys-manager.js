@@ -38,6 +38,7 @@ export class BaileysManager {
     sockets = new Map();
     tentativas = new Map();
     prontoEm = new Map(); // contaId → timestamp de quando fica pronto
+    foiConectado = new Map(); // contaId → chegou a abrir conexão 'open'
     constructor(supabase) {
         this.supabase = supabase;
     }
@@ -46,7 +47,7 @@ export class BaileysManager {
         const { data } = await this.supabase
             .from('conexoes')
             .select('conta_id, status')
-            .not('status', 'eq', 'desconectado');
+            .eq('status', 'conectado'); // só restaura sessões realmente conectadas; ignora QRs pendentes
         for (const row of data ?? []) {
             const contaId = row.conta_id;
             try {
@@ -104,6 +105,7 @@ export class BaileysManager {
             if (connection === 'open') {
                 const numero = extrairNumero(socket.user?.id);
                 logger.info({ contaId, numero }, 'Conectado');
+                this.foiConectado.set(contaId, true);
                 this.tentativas.delete(contaId);
                 // Warmup: bloquear envios por WARMUP_MS para a sessão estabilizar
                 // sem fazer chamadas desnecessárias à Meta logo após conectar.
@@ -124,13 +126,16 @@ export class BaileysManager {
             if (connection === 'close') {
                 const code = lastDisconnect?.error?.output?.statusCode;
                 const loggedOut = code === DisconnectReason.loggedOut;
-                logger.warn({ contaId, code }, `Conexão encerrada${loggedOut ? ' (logout)' : ''}`);
+                const eraConectado = this.foiConectado.get(contaId) ?? false;
+                logger.warn({ contaId, code, eraConectado }, `Conexão encerrada${loggedOut ? ' (logout)' : ''}`);
                 this.sockets.delete(contaId);
+                this.foiConectado.delete(contaId);
                 await this.supabase
                     .from('conexoes')
                     .upsert({ conta_id: contaId, status: 'desconectado', qr_code: null, comando: null }, { onConflict: 'conta_id' });
-                if (!loggedOut) {
-                    // Reconexão automática com backoff (máx 5 tentativas)
+                // Só reconecta automaticamente se a sessão chegou a ficar conectada.
+                // QR expirado sem scan → status volta para 'desconectado'; usuário clica Conectar de novo.
+                if (!loggedOut && eraConectado) {
                     const tentativas = (this.tentativas.get(contaId) ?? 0) + 1;
                     this.tentativas.set(contaId, tentativas);
                     if (tentativas <= 5) {
@@ -218,5 +223,6 @@ export class BaileysManager {
         }
         this.prontoEm.delete(contaId);
         this.tentativas.delete(contaId);
+        this.foiConectado.delete(contaId);
     }
 }
