@@ -9,6 +9,10 @@
     "build": "tsc",
     "start": "node dist/index.js"
   },
+  "allowScripts": {
+    "puppeteer": true,
+    "esbuild": true
+  },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0",
     "dotenv": "^16.0.0",

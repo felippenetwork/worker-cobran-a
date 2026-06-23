@@ -3,7 +3,10 @@
 // Regras anti-ban mantidas: intervalo 45–80s, janela 09–20h, fila um-a-um.
 // ⚠️ Nunca rodar em serverless/Vercel — exclusivo para VPS.
 
-import { Client, LocalAuth } from 'whatsapp-web.js'
+import wwebjs from 'whatsapp-web.js'
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const { Client, LocalAuth } = wwebjs as any
+type WWebClient = InstanceType<typeof wwebjs.Client>
 import pino from 'pino'
 import path from 'path'
 import fs from 'fs/promises'
@@ -17,7 +20,7 @@ const logger = pino({ level: process.env.LOG_LEVEL ?? 'warn' })
 const WARMUP_MS = 30_000
 
 export class WhatsAppManager {
-  private clients      = new Map<string, Client>()
+  private clients      = new Map<string, WWebClient>()
   private prontoEm     = new Map<string, number>()
   private tentativas   = new Map<string, number>()
   private foiConectado = new Map<string, boolean>()
@@ -63,7 +66,7 @@ export class WhatsAppManager {
 
     this.clients.set(contaId, client)
 
-    client.on('qr', async (qr) => {
+    client.on('qr', async (qr: string) => {
       logger.info({ contaId }, 'QR gerado')
       await this.supabase.from('conexoes').upsert(
         { conta_id: contaId, status: 'conectando', qr_code: qr, comando: null },
@@ -92,7 +95,7 @@ export class WhatsAppManager {
       )
     })
 
-    client.on('disconnected', async (reason) => {
+    client.on('disconnected', async (reason: string) => {
       const eraConectado = this.foiConectado.get(contaId) ?? false
       logger.warn({ contaId, reason, eraConectado }, 'Desconectado')
 

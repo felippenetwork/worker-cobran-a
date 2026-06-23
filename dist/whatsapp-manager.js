@@ -2,7 +2,9 @@
 // Usa whatsapp-web.js (Puppeteer + WhatsApp Web real) em vez de Baileys.
 // Regras anti-ban mantidas: intervalo 45–80s, janela 09–20h, fila um-a-um.
 // ⚠️ Nunca rodar em serverless/Vercel — exclusivo para VPS.
-import { Client, LocalAuth } from 'whatsapp-web.js';
+import wwebjs from 'whatsapp-web.js';
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const { Client, LocalAuth } = wwebjs;
 import pino from 'pino';
 import path from 'path';
 import fs from 'fs/promises';
