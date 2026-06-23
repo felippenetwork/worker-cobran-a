@@ -1,6 +1,6 @@
 // Worker WhatsApp — anti-ban + resiliência integrados.
 //
-// Regras obrigatórias (baileys-conexao §3 + notificacoes-fila §5):
+// Regras obrigatórias (notificacoes-fila §5):
 //   • Janela 09:00–20:00 SP. Fora disso: overflow → dia seguinte às 09h.
 //   • Intervalo 45–80s aleatório ENTRE contas (nunca em paralelo no mesmo número).
 //   • Warmup 60s após conectar (hasSocket retorna false durante esse período).
@@ -20,7 +20,7 @@ import {
 } from '../format.js'
 import { resolverVariaveis } from '../variaveis.js'
 import type { SupabaseAdmin } from '../supabase.js'
-import type { BaileysManager } from '../baileys-manager.js'
+import type { WhatsAppManager } from '../whatsapp-manager.js'
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? 'warn' })
 
@@ -31,18 +31,19 @@ const RETRY_DELAY_MS = 5_000   // pausa entre tentativas (ms)
 
 export async function processarFilaWhatsApp(
   supabase: SupabaseAdmin,
-  manager: BaileysManager,
+  manager: WhatsAppManager,
 ) {
   if (!dentroDaJanela()) return  // fora da janela 09–20h SP
 
   const agora = new Date().toISOString()
 
-  // Carrega candidatos: fila pendente, vencidos ou com agendamento no passado
+  // Carrega candidatos: fila pendente, excluindo tipos imediatos (têm loop próprio)
   const { data: pendentes } = await supabase
     .from('notificacoes_enviadas')
     .select('id, conta_id, parcela_id, cliente_id, tipo')
     .eq('canal', 'whatsapp')
     .eq('status', 'fila')
+    .not('tipo', 'in', '("pagamento_confirmado","boasvindas")')
     .lte('agendado_para', agora)
     .order('agendado_para', { ascending: true })
     .limit(30)
@@ -79,9 +80,10 @@ export async function processarFilaWhatsApp(
 
 async function processarUmaNotificacao(
   supabase: SupabaseAdmin,
-  manager: BaileysManager,
+  manager: WhatsAppManager,
   contaId: string,
   notif: { id: string; conta_id: string; parcela_id: string | null; cliente_id: string; tipo: string },
+  semDigitacao = false,
 ) {
   // ── 1. Buscar template ────────────────────────────────────────────────────
   const { data: cfg } = await supabase
@@ -145,15 +147,14 @@ async function processarUmaNotificacao(
 
   for (let tentativa = 1; tentativa <= MAX_RETRIES; tentativa++) {
     // Re-verificar socket a cada tentativa (pode ter caído entre uma e outra)
-    if (!manager.hasSocket(contaId)) {
+    if (!manager.hasSocket(contaId, semDigitacao)) {
       logger.warn({ notifId: notif.id, tentativa }, 'Socket indisponível — reagendando')
       await reagendar(supabase, notif.id)
       return
     }
 
     try {
-      // enviarMensagem já inclui: typing 23-27s → paused → sendMessage
-      await manager.enviarMensagem(contaId, celular, mensagem)
+      await manager.enviarMensagem(contaId, celular, mensagem, semDigitacao)
 
       await supabase.from('notificacoes_enviadas').update({
         status:         'enviado',
@@ -183,6 +184,49 @@ async function processarUmaNotificacao(
   } else {
     // Falha dentro da janela (número inválido, bloqueado, etc.) → marca como falhou
     await marcarFalhou(supabase, notif.id)
+  }
+}
+
+// ── Loop imediato: pagamento_confirmado e boasvindas — sem typing, poll a cada 3s ──
+// Chamado em paralelo com processarFilaWhatsApp. Não aplica intervalo anti-ban
+// entre contas pois são confirmações transacionais (não marketing).
+
+export async function processarFilaImediata(
+  supabase: SupabaseAdmin,
+  manager: WhatsAppManager,
+) {
+  if (!dentroDaJanela()) return
+
+  const agora = new Date().toISOString()
+
+  const { data: pendentes } = await supabase
+    .from('notificacoes_enviadas')
+    .select('id, conta_id, parcela_id, cliente_id, tipo')
+    .eq('canal', 'whatsapp')
+    .eq('status', 'fila')
+    .in('tipo', ['pagamento_confirmado', 'boasvindas'])
+    .lte('agendado_para', agora)
+    .order('agendado_para', { ascending: true })
+    .limit(10)
+
+  if (!pendentes?.length) return
+
+  type Notif = {
+    id: string; conta_id: string
+    parcela_id: string | null; cliente_id: string; tipo: string
+  }
+  const porConta = new Map<string, Notif>()
+  for (const n of pendentes) {
+    const contaId = n.conta_id as string
+    if (!porConta.has(contaId) && manager.hasSocket(contaId, true)) {
+      porConta.set(contaId, n as Notif)
+    }
+  }
+
+  if (!porConta.size) return
+
+  for (const [contaId, notif] of porConta) {
+    await processarUmaNotificacao(supabase, manager, contaId, notif, true)
   }
 }
 

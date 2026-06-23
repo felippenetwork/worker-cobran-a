@@ -5,21 +5,22 @@ import 'dotenv/config';
 import { createServer } from 'http';
 import pino from 'pino';
 import { createAdminClient } from './supabase.js';
-import { BaileysManager } from './baileys-manager.js';
+import { WhatsAppManager } from './whatsapp-manager.js';
 import { runScheduler } from './scheduler.js';
-import { processarFilaWhatsApp } from './workers/whatsapp-worker.js';
+import { processarFilaWhatsApp, processarFilaImediata } from './workers/whatsapp-worker.js';
 import { processarFilaEmail } from './workers/email-worker.js';
 import { sleep } from './format.js';
 const logger = pino({ level: process.env.LOG_LEVEL ?? 'warn' });
 // Intervalos de polling
 const SCHEDULER_INTERVAL_MS = 60 * 60 * 1000; // 1h entre execuções do scheduler
 const WA_POLL_INTERVAL_MS = 15_000; // 15s entre ciclos do worker WA
+const WA_IMEDIATO_INTERVAL_MS = 3_000; // 3s — pagamento_confirmado e boasvindas
 const EMAIL_POLL_INTERVAL_MS = 15_000; // 15s entre ciclos do worker e-mail
 const CMD_POLL_INTERVAL_MS = 10_000; // 10s entre verificações de comandos pendentes
 async function main() {
     logger.info('Cobranx Worker iniciando...');
     const supabase = createAdminClient();
-    const manager = new BaileysManager(supabase);
+    const manager = new WhatsAppManager(supabase);
     // ── Startup: limpar estados inconsistentes ─────────────────────────────────
     // 'conectando' sem sessão real → desconectado; comandos stale → limpar
     await supabase.from('conexoes')
@@ -96,7 +97,7 @@ async function main() {
             }
         }
     };
-    // ── Worker WhatsApp: polling a cada 15s ─────────────────────────────────────
+    // ── Worker WhatsApp: polling a cada 15s (lembretes regulares) ───────────────
     const loopWhatsApp = async () => {
         while (true) {
             try {
@@ -106,6 +107,18 @@ async function main() {
                 logger.error({ err }, 'Worker WA: erro');
             }
             await sleep(WA_POLL_INTERVAL_MS);
+        }
+    };
+    // ── Worker imediato: pagamento_confirmado + boasvindas a cada 3s ─────────────
+    const loopImediato = async () => {
+        while (true) {
+            try {
+                await processarFilaImediata(supabase, manager);
+            }
+            catch (err) {
+                logger.error({ err }, 'Worker imediato: erro');
+            }
+            await sleep(WA_IMEDIATO_INTERVAL_MS);
         }
     };
     // ── Worker E-mail: polling a cada 15s ───────────────────────────────────────
@@ -122,6 +135,7 @@ async function main() {
     };
     loopComandos();
     loopWhatsApp();
+    loopImediato();
     loopEmail();
     // ── Health check HTTP ───────────────────────────────────────────────────────
     const healthPort = parseInt(process.env.HEALTH_PORT ?? '3001');
