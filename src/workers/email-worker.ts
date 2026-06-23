@@ -12,11 +12,15 @@ import { resolverVariaveis } from '../variaveis.js'
 import type { SupabaseAdmin } from '../supabase.js'
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? 'warn' })
-const resend  = new Resend(process.env.RESEND_API_KEY)
+const resend  = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null
 
 const SITE_URL = process.env.SITE_URL ?? process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'
 
 export async function processarFilaEmail(supabase: SupabaseAdmin) {
+  if (!resend) {
+    logger.warn('RESEND_API_KEY não configurada — worker de e-mail desativado')
+    return
+  }
   if (!dentroDaJanela()) return
 
   const agora = new Date().toISOString()
@@ -106,7 +110,7 @@ async function processarUmEmail(
   const html = gerarHTMLEmail({ assunto, conteudo: conteudoFinal, fromName, unsubscribeUrl: unsubUrl })
 
   try {
-    const { data: resendData, error: resendErr } = await resend.emails.send({
+    const { data: resendData, error: resendErr } = await resend!.emails.send({
       from:    fromAddress,
       to:      toAddress,
       subject: assunto,

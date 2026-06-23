@@ -9,9 +9,13 @@ import { Resend } from 'resend';
 import { dentroDaJanela, sleep, hojeEmSP, addDias } from '../format.js';
 import { resolverVariaveis } from '../variaveis.js';
 const logger = pino({ level: process.env.LOG_LEVEL ?? 'warn' });
-const resend = new Resend(process.env.RESEND_API_KEY);
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 const SITE_URL = process.env.SITE_URL ?? process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000';
 export async function processarFilaEmail(supabase) {
+    if (!resend) {
+        logger.warn('RESEND_API_KEY não configurada — worker de e-mail desativado');
+        return;
+    }
     if (!dentroDaJanela())
         return;
     const agora = new Date().toISOString();
