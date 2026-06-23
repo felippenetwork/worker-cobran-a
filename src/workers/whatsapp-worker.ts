@@ -20,7 +20,7 @@ import {
 } from '../format.js'
 import { resolverVariaveis } from '../variaveis.js'
 import type { SupabaseAdmin } from '../supabase.js'
-import type { WhatsAppManager } from '../whatsapp-manager.js'
+import type { BaileysManager } from '../baileys-manager.js'
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? 'warn' })
 
@@ -31,7 +31,7 @@ const RETRY_DELAY_MS = 5_000   // pausa entre tentativas (ms)
 
 export async function processarFilaWhatsApp(
   supabase: SupabaseAdmin,
-  manager: WhatsAppManager,
+  manager: BaileysManager,
 ) {
   if (!dentroDaJanela()) return  // fora da janela 09–20h SP
 
@@ -80,7 +80,7 @@ export async function processarFilaWhatsApp(
 
 async function processarUmaNotificacao(
   supabase: SupabaseAdmin,
-  manager: WhatsAppManager,
+  manager: BaileysManager,
   contaId: string,
   notif: { id: string; conta_id: string; parcela_id: string | null; cliente_id: string; tipo: string },
   semDigitacao = false,
@@ -193,7 +193,7 @@ async function processarUmaNotificacao(
 
 export async function processarFilaImediata(
   supabase: SupabaseAdmin,
-  manager: WhatsAppManager,
+  manager: BaileysManager,
 ) {
   if (!dentroDaJanela()) return
 
