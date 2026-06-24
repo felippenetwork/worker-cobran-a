@@ -62,7 +62,11 @@ export class BaileysManager {
     await fs.mkdir(sessionPath(contaId), { recursive: true })
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath(contaId))
-    const { version }          = await fetchLatestBaileysVersion()
+
+    let version: [number, number, number] = [2, 3000, 1015901307]
+    try { const v = await fetchLatestBaileysVersion(); version = v.version } catch {
+      logger.warn({ contaId }, 'fetchLatestBaileysVersion falhou — usando versão fallback')
+    }
 
     const keepAliveMs = 55_000 + Math.floor(Math.random() * 35_000)
 
@@ -122,10 +126,11 @@ export class BaileysManager {
 
       if (connection === 'close') {
         const code = (lastDisconnect?.error as any)?.output?.statusCode
-        const loggedOut  = code === DisconnectReason.loggedOut
-        const eraConectado = this.foiConectado.get(contaId) ?? false
+        const loggedOut      = code === DisconnectReason.loggedOut
+        const restartRequired = code === DisconnectReason.restartRequired // 515 — após pareamento
+        const eraConectado   = this.foiConectado.get(contaId) ?? false
 
-        logger.warn({ contaId, code, eraConectado }, `Conexão encerrada${loggedOut ? ' (logout)' : ''}`)
+        logger.warn({ contaId, code, eraConectado, restartRequired }, `Conexão encerrada${loggedOut ? ' (logout)' : ''}`)
         this.sockets.delete(contaId)
         this.foiConectado.delete(contaId)
 
@@ -134,11 +139,19 @@ export class BaileysManager {
           { onConflict: 'conta_id' },
         )
 
-        if (!loggedOut && eraConectado) {
+        if (loggedOut) {
+          // Sessão inválida — limpa e reconecta imediatamente para gerar novo QR
+          await fs.rm(sessionPath(contaId), { recursive: true, force: true })
+          logger.info({ contaId }, 'Sessão inválida removida — reconectando para novo QR')
+          setTimeout(() => this.conectar(contaId), 2_000)
+        }
+
+        if (!loggedOut && (eraConectado || restartRequired)) {
           const tentativas = (this.tentativas.get(contaId) ?? 0) + 1
           this.tentativas.set(contaId, tentativas)
           if (tentativas <= 5) {
-            const delay = Math.min(5_000 * tentativas, 60_000)
+            // restartRequired: reconecta rápido (2s) pois as credenciais já estão salvas
+            const delay = restartRequired ? 2_000 : Math.min(5_000 * tentativas, 60_000)
             logger.info({ contaId, tentativa: tentativas, delay }, 'Reconectando...')
             setTimeout(() => this.conectar(contaId), delay)
           } else {
