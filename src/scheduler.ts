@@ -122,18 +122,21 @@ async function processarConta(supabase: SupabaseAdmin, contaId: string, hoje: st
     const dataAlvo = addDias(hoje, offset)
 
     // Parcelas com esse vencimento, abertas
+    // parcelas não tem cliente_id — buscar via cobrancas (join)
     const { data: parcelas } = await supabase
       .from('parcelas')
-      .select('id, cliente_id')
+      .select('id, cobranca_id, cobrancas!inner(cliente_id)')
       .eq('conta_id', contaId)
       .eq('data_vencimento', dataAlvo)
       .eq('status', 'aberta')
 
     for (const parcela of parcelas ?? []) {
+      const clienteId = (parcela.cobrancas as any)?.cliente_id as string
       const base = {
-        conta_id:  contaId,
-        parcela_id: parcela.id,
-        cliente_id: parcela.cliente_id,
+        conta_id:    contaId,
+        parcela_id:  parcela.id,
+        cobranca_id: parcela.cobranca_id,
+        cliente_id:  clienteId,
         tipo,
       }
 

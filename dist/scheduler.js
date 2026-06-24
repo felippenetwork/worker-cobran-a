@@ -109,17 +109,20 @@ async function processarConta(supabase, contaId, hoje) {
             continue; // ambos os canais inativos
         const dataAlvo = addDias(hoje, offset);
         // Parcelas com esse vencimento, abertas
+        // parcelas não tem cliente_id — buscar via cobrancas (join)
         const { data: parcelas } = await supabase
             .from('parcelas')
-            .select('id, cliente_id')
+            .select('id, cobranca_id, cobrancas!inner(cliente_id)')
             .eq('conta_id', contaId)
             .eq('data_vencimento', dataAlvo)
             .eq('status', 'aberta');
         for (const parcela of parcelas ?? []) {
+            const clienteId = parcela.cobrancas?.cliente_id;
             const base = {
                 conta_id: contaId,
                 parcela_id: parcela.id,
-                cliente_id: parcela.cliente_id,
+                cobranca_id: parcela.cobranca_id,
+                cliente_id: clienteId,
                 tipo,
             };
             // WhatsApp
