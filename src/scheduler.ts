@@ -12,6 +12,16 @@ import type { SupabaseAdmin } from './supabase.js'
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? 'warn' })
 
+function calcularProximoVencimento(ultimoVencimento: string, diaPagamento: number): string {
+  const [ano, mes] = ultimoVencimento.split('-').map(Number)
+  let novoMes = mes + 1
+  let novoAno = ano
+  if (novoMes > 12) { novoMes = 1; novoAno++ }
+  const ultimoDia = new Date(novoAno, novoMes, 0).getDate()
+  const dia = Math.min(diaPagamento, ultimoDia)
+  return `${novoAno}-${String(novoMes).padStart(2, '0')}-${String(dia).padStart(2, '0')}`
+}
+
 const JANELAS = [
   { tipo: '5d',        offset: 5 },
   { tipo: '3d',        offset: 3 },
@@ -31,6 +41,9 @@ export async function runScheduler(supabase: SupabaseAdmin) {
 
   for (const conta of contas ?? []) {
     try {
+      // Gera parcelas recorrentes antes de processar notificações, assim a parcela
+      // recém-criada já entra na varredura D-5/D-3... do mesmo ciclo.
+      await manterParcelasRecorrentes(supabase, conta.id as string)
       await processarConta(supabase, conta.id as string, hoje)
     } catch (err) {
       logger.error({ contaId: conta.id, err }, 'Scheduler: erro ao processar conta')
@@ -38,6 +51,56 @@ export async function runScheduler(supabase: SupabaseAdmin) {
   }
 
   logger.info('Scheduler: varredura concluída')
+}
+
+async function manterParcelasRecorrentes(supabase: SupabaseAdmin, contaId: string) {
+  const { data: cobrancas } = await supabase
+    .from('cobrancas')
+    .select('id, dia_pagamento, valor_mensalidade')
+    .eq('conta_id', contaId)
+    .eq('recorrente', true)
+    .eq('status', 'ativa')
+
+  for (const cob of cobrancas ?? []) {
+    const { data: abertas } = await supabase
+      .from('parcelas')
+      .select('id')
+      .eq('conta_id', contaId)
+      .eq('cobranca_id', cob.id)
+      .eq('status', 'aberta')
+      .limit(1)
+
+    if (abertas && abertas.length > 0) continue  // já tem parcela em aberto
+
+    const { data: ultimaArr } = await supabase
+      .from('parcelas')
+      .select('numero, data_vencimento')
+      .eq('conta_id', contaId)
+      .eq('cobranca_id', cob.id)
+      .order('numero', { ascending: false })
+      .limit(1)
+
+    if (!ultimaArr || ultimaArr.length === 0) continue  // cobrança sem parcelas (não deveria ocorrer)
+
+    const ultima = ultimaArr[0]
+    const proximoNumero     = (ultima.numero as number) + 1
+    const proximoVencimento = calcularProximoVencimento(ultima.data_vencimento as string, cob.dia_pagamento as number)
+
+    const { error } = await supabase.from('parcelas').insert({
+      conta_id:        contaId,
+      cobranca_id:     cob.id,
+      numero:          proximoNumero,
+      valor:           cob.valor_mensalidade,
+      data_vencimento: proximoVencimento,
+      status:          'aberta',
+    })
+
+    if (error) {
+      logger.error({ contaId, cobrancaId: cob.id, error }, 'Scheduler: erro ao gerar parcela recorrente')
+    } else {
+      logger.info({ contaId, cobrancaId: cob.id, proximoVencimento, numero: proximoNumero }, 'Scheduler: parcela recorrente gerada')
+    }
+  }
 }
 
 async function processarConta(supabase: SupabaseAdmin, contaId: string, hoje: string) {
