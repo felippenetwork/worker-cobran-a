@@ -27,7 +27,7 @@ export async function processarFilaEmail(supabase: SupabaseAdmin) {
 
   const { data: pendentes } = await supabase
     .from('notificacoes_enviadas')
-    .select('id, conta_id, parcela_id, cliente_id, tipo')
+    .select('id, conta_id, parcela_id, cobranca_id, cliente_id, tipo')
     .eq('canal', 'email')
     .eq('status', 'fila')
     .lte('agendado_para', agora)
@@ -42,7 +42,7 @@ export async function processarFilaEmail(supabase: SupabaseAdmin) {
 
 async function processarUmEmail(
   supabase: SupabaseAdmin,
-  notif: { id: string; conta_id: string; parcela_id: string | null; cliente_id: string; tipo: string },
+  notif: { id: string; conta_id: string; parcela_id: string | null; cobranca_id: string | null; cliente_id: string; tipo: string },
 ) {
   const contaId = notif.conta_id
 
@@ -86,6 +86,25 @@ async function processarUmEmail(
     return
   }
 
+  // Resolver ID da parcela — para boasvindas, parcela_id é null; buscar 1ª parcela da cobrança
+  let parcelaId = notif.parcela_id
+  if (!parcelaId && notif.cobranca_id) {
+    const { data: primeiraParc } = await supabase
+      .from('parcelas')
+      .select('id')
+      .eq('cobranca_id', notif.cobranca_id)
+      .order('numero', { ascending: true })
+      .limit(1)
+      .maybeSingle()
+    parcelaId = (primeiraParc as any)?.id ?? null
+  }
+
+  if (!parcelaId) {
+    logger.warn({ notifId: notif.id, tipo: notif.tipo }, 'Email: sem parcela para variáveis — falhou')
+    await supabase.from('notificacoes_enviadas').update({ status: 'falhou' }).eq('id', notif.id)
+    return
+  }
+
   const fromName    = (remConfig as any)?.from_name ?? localPart
   const fromAddress = `${fromName} <${localPart}@${dominio}>`
   const toAddress   = (cliente as any).email
@@ -96,7 +115,7 @@ async function processarUmEmail(
   try {
     conteudoFinal = await resolverVariaveis(supabase, {
       contaId,
-      parcelaId: notif.parcela_id ?? notif.id,
+      parcelaId,
       clienteId: notif.cliente_id,
       template,
     })

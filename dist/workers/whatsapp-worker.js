@@ -4,7 +4,7 @@
 //   • Janela 09:00–20:00 SP. Fora disso: overflow → dia seguinte às 09h.
 //   • Intervalo 45–80s aleatório ENTRE contas (nunca em paralelo no mesmo número).
 //   • Warmup 60s após conectar (hasSocket retorna false durante esse período).
-//   • Simulação de digitação 23–27s dentro do enviarMensagem.
+//   • Simulação de digitação 7–9s dentro do enviarMensagem.
 //   • Retry: até 2 tentativas com pausa de 5s antes de desistir.
 //   • Socket caiu durante retry → reagenda (não descarta).
 //   • Cliente deletado → cancela.
@@ -23,7 +23,7 @@ export async function processarFilaWhatsApp(supabase, manager) {
     // Carrega candidatos: fila pendente, excluindo tipos imediatos (têm loop próprio)
     const { data: pendentes } = await supabase
         .from('notificacoes_enviadas')
-        .select('id, conta_id, parcela_id, cliente_id, tipo')
+        .select('id, conta_id, parcela_id, cobranca_id, cliente_id, tipo')
         .eq('canal', 'whatsapp')
         .eq('status', 'fila')
         .not('tipo', 'in', '("pagamento_confirmado","boasvindas")')
@@ -32,6 +32,7 @@ export async function processarFilaWhatsApp(supabase, manager) {
         .limit(30);
     if (!pendentes?.length)
         return;
+    // Uma mensagem por conta — nunca paralelo no mesmo número
     const porConta = new Map();
     for (const n of pendentes) {
         const contaId = n.conta_id;
@@ -87,23 +88,40 @@ async function processarUmaNotificacao(supabase, manager, contaId, notif, semDig
         await marcarFalhou(supabase, notif.id);
         return;
     }
-    // ── 3. Resolver variáveis (#NOME#, #VALOR#, etc.) ────────────────────────
+    // ── 3. Resolver ID da parcela para variáveis ──────────────────────────────
+    // Para boasvindas, parcela_id é NULL — buscar 1ª parcela da cobrança
+    let parcelaId = notif.parcela_id;
+    if (!parcelaId && notif.cobranca_id) {
+        const { data: primeiraParc } = await supabase
+            .from('parcelas')
+            .select('id')
+            .eq('cobranca_id', notif.cobranca_id)
+            .order('numero', { ascending: true })
+            .limit(1)
+            .maybeSingle();
+        parcelaId = primeiraParc?.id ?? null;
+    }
+    if (!parcelaId) {
+        logger.warn({ notifId: notif.id, tipo: notif.tipo }, 'Sem parcela para resolver variáveis — falhou');
+        await marcarFalhou(supabase, notif.id);
+        return;
+    }
+    // ── 4. Resolver variáveis (#NOME#, #VALOR#, etc.) ────────────────────────
     let mensagem;
     try {
         mensagem = await resolverVariaveis(supabase, {
             contaId,
-            parcelaId: notif.parcela_id ?? notif.id,
+            parcelaId,
             clienteId: notif.cliente_id,
             template,
         });
     }
     catch (err) {
         logger.error({ notifId: notif.id, err }, 'Erro ao resolver variáveis — reagendando');
-        // Falha de variável pode ser transiente (DB lento): reagenda no lugar de descartar
         await reagendar(supabase, notif.id);
         return;
     }
-    // ── 4. Enviar com retry ───────────────────────────────────────────────────
+    // ── 5. Enviar com retry ───────────────────────────────────────────────────
     let ultimoErro;
     for (let tentativa = 1; tentativa <= MAX_RETRIES; tentativa++) {
         // Re-verificar socket a cada tentativa (pode ter caído entre uma e outra)
@@ -130,7 +148,7 @@ async function processarUmaNotificacao(supabase, manager, contaId, notif, semDig
             }
         }
     }
-    // ── 5. Todas as tentativas falharam ──────────────────────────────────────
+    // ── 6. Todas as tentativas falharam ──────────────────────────────────────
     logger.error({ contaId, notifId: notif.id, ultimoErro }, 'WhatsApp: todas as tentativas falharam');
     if (!dentroDaJanela()) {
         // Já saímos da janela — reagenda para amanhã às 09h (não descarta)
@@ -150,7 +168,7 @@ export async function processarFilaImediata(supabase, manager) {
     const agora = new Date().toISOString();
     const { data: pendentes } = await supabase
         .from('notificacoes_enviadas')
-        .select('id, conta_id, parcela_id, cliente_id, tipo')
+        .select('id, conta_id, parcela_id, cobranca_id, cliente_id, tipo')
         .eq('canal', 'whatsapp')
         .eq('status', 'fila')
         .in('tipo', ['pagamento_confirmado', 'boasvindas'])
