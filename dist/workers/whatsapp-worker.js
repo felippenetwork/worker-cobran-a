@@ -163,8 +163,7 @@ async function processarUmaNotificacao(supabase, manager, contaId, notif, semDig
 // Chamado em paralelo com processarFilaWhatsApp. Não aplica intervalo anti-ban
 // entre contas pois são confirmações transacionais (não marketing).
 export async function processarFilaImediata(supabase, manager) {
-    if (!dentroDaJanela())
-        return;
+    // Sem restrição de janela — boasvindas e pagamento_confirmado são transacionais
     const agora = new Date().toISOString();
     const { data: pendentes } = await supabase
         .from('notificacoes_enviadas')

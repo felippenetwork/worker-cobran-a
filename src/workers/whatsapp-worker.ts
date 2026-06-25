@@ -215,8 +215,7 @@ export async function processarFilaImediata(
   supabase: SupabaseAdmin,
   manager: IWAManager,
 ) {
-  if (!dentroDaJanela()) return
-
+  // Sem restrição de janela — boasvindas e pagamento_confirmado são transacionais
   const agora = new Date().toISOString()
 
   const { data: pendentes } = await supabase

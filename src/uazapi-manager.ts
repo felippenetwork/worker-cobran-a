@@ -59,16 +59,21 @@ export class UazapiManager {
   async conectar(contaId: string) {
     const name = instName(contaId)
 
-    // Cria instância (ignora erro se já existir)
+    // Cria instância (ignora erro 4xx se já existir)
     try {
       await api('POST', '/instance/create', {
         instanceName: name,
         qrcode:       true,
-        integration:  'WHATSAPP-BAILEYS',
       })
       logger.info({ contaId, name }, 'uazapi: instância criada')
-    } catch (err) {
-      logger.warn({ contaId, err }, 'uazapi: create (pode já existir — ok)')
+    } catch (err: any) {
+      const msg = err?.message ?? ''
+      if (/already|exist/i.test(msg) || /40[09]/.test(msg)) {
+        logger.info({ contaId }, 'uazapi: instância já existe — ok')
+      } else {
+        logger.error({ contaId, err }, 'uazapi: falha ao criar instância')
+        throw err
+      }
     }
 
     await this.supabase.from('conexoes').upsert(

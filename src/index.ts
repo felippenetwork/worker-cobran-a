@@ -6,7 +6,6 @@ import 'dotenv/config'
 import { createServer } from 'http'
 import pino from 'pino'
 import { createAdminClient } from './supabase.js'
-import { BaileysManager } from './baileys-manager.js'
 import { UazapiManager } from './uazapi-manager.js'
 import { runScheduler } from './scheduler.js'
 import { processarFilaWhatsApp, processarFilaImediata } from './workers/whatsapp-worker.js'
@@ -27,13 +26,9 @@ async function main() {
 
   const supabase = createAdminClient()
 
-  // Usa uazapi se UAZAPI_URL estiver configurado, caso contrário usa Baileys
-  const usaUazapi = !!process.env.UAZAPI_URL
-  const manager   = usaUazapi
-    ? new UazapiManager(supabase)
-    : new BaileysManager(supabase)
+  const manager = new UazapiManager(supabase)
 
-  logger.info({ provider: usaUazapi ? 'uazapi' : 'baileys' }, 'WhatsApp provider selecionado')
+  logger.info('WhatsApp provider: uazapi')
 
   // ── Startup: limpar estados inconsistentes ─────────────────────────────────
   // 'conectando' sem sessão real → desconectado; comandos stale → limpar
