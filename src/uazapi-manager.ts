@@ -19,7 +19,7 @@ function instName(contaId: string): string {
 async function api(method: string, path: string, body?: object): Promise<any> {
   const res = await fetch(`${BASE_URL}${path}`, {
     method,
-    headers: { 'Content-Type': 'application/json', apikey: GLOBAL_TOKEN },
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GLOBAL_TOKEN}` },
     body:    body ? JSON.stringify(body) : undefined,
   })
   const text = await res.text()

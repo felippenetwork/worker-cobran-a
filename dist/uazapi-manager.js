@@ -13,7 +13,7 @@ function instName(contaId) {
 async function api(method, path, body) {
     const res = await fetch(`${BASE_URL}${path}`, {
         method,
-        headers: { 'Content-Type': 'application/json', apikey: GLOBAL_TOKEN },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GLOBAL_TOKEN}` },
         body: body ? JSON.stringify(body) : undefined,
     });
     const text = await res.text();
