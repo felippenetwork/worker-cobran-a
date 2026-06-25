@@ -20,7 +20,7 @@ import {
 } from '../format.js'
 import { resolverVariaveis } from '../variaveis.js'
 import type { SupabaseAdmin } from '../supabase.js'
-import type { BaileysManager } from '../baileys-manager.js'
+import type { IWAManager } from '../wa-manager.js'
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? 'warn' })
 
@@ -36,7 +36,7 @@ type Notif = {
 
 export async function processarFilaWhatsApp(
   supabase: SupabaseAdmin,
-  manager: BaileysManager,
+  manager: IWAManager,
 ) {
   if (!dentroDaJanela()) return  // fora da janela 09–20h SP
 
@@ -81,7 +81,7 @@ export async function processarFilaWhatsApp(
 
 async function processarUmaNotificacao(
   supabase: SupabaseAdmin,
-  manager: BaileysManager,
+  manager: IWAManager,
   contaId: string,
   notif: Notif,
   semDigitacao = false,
@@ -213,7 +213,7 @@ async function processarUmaNotificacao(
 
 export async function processarFilaImediata(
   supabase: SupabaseAdmin,
-  manager: BaileysManager,
+  manager: IWAManager,
 ) {
   if (!dentroDaJanela()) return
 

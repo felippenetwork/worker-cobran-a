@@ -6,6 +6,7 @@ import { createServer } from 'http';
 import pino from 'pino';
 import { createAdminClient } from './supabase.js';
 import { BaileysManager } from './baileys-manager.js';
+import { UazapiManager } from './uazapi-manager.js';
 import { runScheduler } from './scheduler.js';
 import { processarFilaWhatsApp, processarFilaImediata } from './workers/whatsapp-worker.js';
 import { processarFilaEmail } from './workers/email-worker.js';
@@ -20,7 +21,12 @@ const CMD_POLL_INTERVAL_MS = 10_000; // 10s entre verificações de comandos pen
 async function main() {
     logger.info('Cobranx Worker iniciando...');
     const supabase = createAdminClient();
-    const manager = new BaileysManager(supabase);
+    // Usa uazapi se UAZAPI_URL estiver configurado, caso contrário usa Baileys
+    const usaUazapi = !!process.env.UAZAPI_URL;
+    const manager = usaUazapi
+        ? new UazapiManager(supabase)
+        : new BaileysManager(supabase);
+    logger.info({ provider: usaUazapi ? 'uazapi' : 'baileys' }, 'WhatsApp provider selecionado');
     // ── Startup: limpar estados inconsistentes ─────────────────────────────────
     // 'conectando' sem sessão real → desconectado; comandos stale → limpar
     await supabase.from('conexoes')

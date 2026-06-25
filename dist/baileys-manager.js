@@ -154,6 +154,17 @@ export class BaileysManager {
     }
     async reconectar(contaId) {
         await this.encerrarSocket(contaId);
+        // Se numero_conectado está null, o usuário desconectou intencionalmente antes
+        // (desconectarAction limpa imediatamente). Apaga sessão para forçar novo QR.
+        const { data } = await this.supabase
+            .from('conexoes')
+            .select('numero_conectado')
+            .eq('conta_id', contaId)
+            .maybeSingle();
+        if (!data?.numero_conectado) {
+            await fs.rm(sessionPath(contaId), { recursive: true, force: true });
+            logger.info({ contaId }, 'Sessão apagada — reconectando com novo QR');
+        }
         await this.conectar(contaId);
     }
     async enviarMensagem(contaId, para, texto, semDigitacao = false) {
@@ -162,11 +173,10 @@ export class BaileysManager {
             throw new Error(`[${contaId}] Sem socket ativo.`);
         const jid = para.includes('@') ? para : `${para}@s.whatsapp.net`;
         if (!semDigitacao) {
-            const digitandoMs = 23_000 + Math.floor(Math.random() * 4_000);
+            const digitandoMs = 7_000 + Math.floor(Math.random() * 2_000); // 7–9s
             try {
                 await socket.sendPresenceUpdate('composing', jid);
                 await sleep(digitandoMs);
-                await socket.sendPresenceUpdate('paused', jid);
             }
             catch { }
         }
