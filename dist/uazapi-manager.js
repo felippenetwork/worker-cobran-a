@@ -53,8 +53,9 @@ export class UazapiManager {
     }
     // ── Startup: verifica quais instâncias ainda estão conectadas no uazapi ──────
     async restaurarSessoes() {
+        // Inclui 'conectando': worker pode ter reiniciado durante o processo de conexão
         const { data: conexoes } = await this.supabase
-            .from('conexoes').select('conta_id').eq('status', 'conectado');
+            .from('conexoes').select('conta_id').in('status', ['conectado', 'conectando']);
         if (!conexoes?.length)
             return;
         let allInstances = [];
@@ -76,6 +77,16 @@ export class UazapiManager {
             this.instanceTokens.set(contaId, inst.token);
             if (inst.status === 'connected') {
                 this.connected.add(contaId);
+                // Sincronizar DB — pode estar em 'conectando' se o worker reiniciou durante conexão
+                try {
+                    const data = await instanceApi(inst.token, 'GET', '/instance/status');
+                    const numero = data?.status?.jid?.user ?? null;
+                    const nome = data?.instance?.profileName ?? null;
+                    await this.supabase.from('conexoes').upsert({ conta_id: contaId, status: 'conectado', qr_code: null, comando: null,
+                        numero_conectado: numero, device_name: nome,
+                        ultima_conexao: new Date().toISOString() }, { onConflict: 'conta_id' });
+                }
+                catch { }
                 this.iniciarPolling(contaId);
                 logger.info({ contaId }, 'uazapi: sessão restaurada');
             }
@@ -143,18 +154,36 @@ export class UazapiManager {
         await this.supabase.from('conexoes').upsert({ conta_id: contaId, status: 'desconectado', qr_code: null, comando: null,
             numero_conectado: null, device_name: null }, { onConflict: 'conta_id' });
     }
-    // ── Reiniciar conexão (gera novo QR) ─────────────────────────────────────────
+    // ── Reiniciar: sincroniza estado sem desconectar ──────────────────────────────
     async reconectar(contaId) {
+        // Checar estado real no uazapi antes de qualquer ação destrutiva
+        let estadoAtual = 'disconnected';
+        try {
+            estadoAtual = await this.pegarEstado(contaId);
+        }
+        catch { }
+        if (estadoAtual === 'connected') {
+            // Já conectado — apenas sincronizar banco, sem desconectar
+            const token = this.instanceTokens.get(contaId);
+            if (token) {
+                try {
+                    const data = await instanceApi(token, 'GET', '/instance/status');
+                    const numero = data?.status?.jid?.user ?? null;
+                    const nome = data?.instance?.profileName ?? null;
+                    await this.supabase.from('conexoes').upsert({ conta_id: contaId, status: 'conectado', qr_code: null, comando: null,
+                        numero_conectado: numero, device_name: nome,
+                        ultima_conexao: new Date().toISOString() }, { onConflict: 'conta_id' });
+                }
+                catch { }
+            }
+            this.connected.add(contaId);
+            this.iniciarPolling(contaId);
+            logger.info({ contaId }, 'uazapi: reiniciar — já conectado, banco sincronizado');
+            return;
+        }
+        // Não conectado — iniciar nova conexão sem desconectar (preserva sessão se existir)
         this.connected.delete(contaId);
         this.polling.delete(contaId);
-        const token = this.instanceTokens.get(contaId);
-        if (token) {
-            try {
-                await instanceApi(token, 'POST', '/instance/disconnect');
-            }
-            catch { }
-        }
-        await sleep(2_000);
         await this.conectar(contaId);
     }
     // ── Enviar mensagem ───────────────────────────────────────────────────────────
@@ -201,9 +230,11 @@ export class UazapiManager {
             return 'disconnected';
         }
         catch (err) {
-            // 404 = instância deletada no uazapi → limpar token stale
+            // 404 = instância deletada no uazapi → limpar token stale e retornar desconectado
+            // (não lançar — o loop de polling detecta 'disconnected' e chama marcarDesconectado())
             if (/404/.test(String(err?.message ?? ''))) {
                 this.instanceTokens.delete(contaId);
+                return 'disconnected';
             }
             throw err;
         }
@@ -227,16 +258,19 @@ export class UazapiManager {
     async marcarDesconectado(contaId) {
         await this.supabase.from('conexoes').upsert({ conta_id: contaId, status: 'desconectado', qr_code: null, comando: null }, { onConflict: 'conta_id' });
     }
-    // Polling de estado a cada 10s
+    // Polling de estado a cada 10s — circuit breaker após 10 erros consecutivos
     iniciarPolling(contaId) {
         if (this.polling.has(contaId))
             return;
         this.polling.add(contaId);
+        const MAX_ERROS = 10;
+        let erros = 0;
         const loop = async () => {
             while (this.polling.has(contaId)) {
                 await sleep(10_000);
                 try {
                     const state = await this.pegarEstado(contaId);
+                    erros = 0; // reset no sucesso
                     if (state === 'connected' && !this.connected.has(contaId)) {
                         this.connected.add(contaId);
                         logger.info({ contaId }, 'uazapi: conectado!');
@@ -257,13 +291,23 @@ export class UazapiManager {
                         logger.warn({ contaId }, 'uazapi: perdeu conexão');
                         await this.marcarDesconectado(contaId);
                     }
-                    // Se ainda conectando, tenta buscar QR novamente
                     if (state === 'connecting') {
                         await this.buscarEGravarQR(contaId);
                     }
                 }
                 catch (err) {
-                    logger.error({ contaId, err }, 'uazapi: erro no polling');
+                    erros++;
+                    logger.error({ contaId, err, erros }, 'uazapi: erro no polling');
+                    if (erros >= MAX_ERROS) {
+                        logger.error({ contaId }, 'uazapi: muitos erros consecutivos — parando polling');
+                        this.polling.delete(contaId);
+                        this.connected.delete(contaId);
+                        try {
+                            await this.marcarDesconectado(contaId);
+                        }
+                        catch { }
+                        return;
+                    }
                 }
             }
         };

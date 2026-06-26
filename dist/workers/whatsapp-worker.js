@@ -26,7 +26,7 @@ export async function processarFilaWhatsApp(supabase, manager) {
         .select('id, conta_id, parcela_id, cobranca_id, cliente_id, tipo')
         .eq('canal', 'whatsapp')
         .eq('status', 'fila')
-        .not('tipo', 'in', '("pagamento_confirmado","boasvindas")')
+        .not('tipo', 'in', '("pagamento_confirmado","boasvindas","manual")')
         .lte('agendado_para', agora)
         .order('agendado_para', { ascending: true })
         .limit(30);
@@ -122,6 +122,8 @@ async function processarUmaNotificacao(supabase, manager, contaId, notif, semDig
         return;
     }
     // ── 5. Enviar com retry ───────────────────────────────────────────────────
+    // Captura janela agora — não no final dos retries, para evitar edge case de virada de hora
+    const janelaNoInicio = dentroDaJanela();
     let ultimoErro;
     for (let tentativa = 1; tentativa <= MAX_RETRIES; tentativa++) {
         // Re-verificar socket a cada tentativa (pode ter caído entre uma e outra)
@@ -150,8 +152,8 @@ async function processarUmaNotificacao(supabase, manager, contaId, notif, semDig
     }
     // ── 6. Todas as tentativas falharam ──────────────────────────────────────
     logger.error({ contaId, notifId: notif.id, ultimoErro }, 'WhatsApp: todas as tentativas falharam');
-    if (!dentroDaJanela()) {
-        // Já saímos da janela — reagenda para amanhã às 09h (não descarta)
+    if (!janelaNoInicio) {
+        // Processado fora da janela (loop imediato) — reagenda para amanhã às 09h
         await reagendar(supabase, notif.id);
     }
     else {
@@ -159,18 +161,18 @@ async function processarUmaNotificacao(supabase, manager, contaId, notif, semDig
         await marcarFalhou(supabase, notif.id);
     }
 }
-// ── Loop imediato: pagamento_confirmado e boasvindas — sem typing, poll a cada 3s ──
-// Chamado em paralelo com processarFilaWhatsApp. Não aplica intervalo anti-ban
-// entre contas pois são confirmações transacionais (não marketing).
+// ── Loop imediato: transacionais e disparos manuais — sem janela horária ────
+// Inclui: pagamento_confirmado, boasvindas, manual (botão WhatsApp na parcela).
+// Chamado em paralelo com processarFilaWhatsApp.
 export async function processarFilaImediata(supabase, manager) {
-    // Sem restrição de janela — boasvindas e pagamento_confirmado são transacionais
+    // Sem restrição de janela — transacionais e manuais são disparados imediatamente
     const agora = new Date().toISOString();
     const { data: pendentes } = await supabase
         .from('notificacoes_enviadas')
         .select('id, conta_id, parcela_id, cobranca_id, cliente_id, tipo')
         .eq('canal', 'whatsapp')
         .eq('status', 'fila')
-        .in('tipo', ['pagamento_confirmado', 'boasvindas'])
+        .in('tipo', ['pagamento_confirmado', 'boasvindas', 'manual'])
         .lte('agendado_para', agora)
         .order('agendado_para', { ascending: true })
         .limit(10);
