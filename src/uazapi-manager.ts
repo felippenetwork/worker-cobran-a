@@ -244,9 +244,11 @@ export class UazapiManager {
       if (s === 'connecting') return 'connecting'
       return 'disconnected'
     } catch (err: any) {
-      // 404 = instância deletada no uazapi → limpar token stale
+      // 404 = instância deletada no uazapi → limpar token stale e retornar desconectado
+      // (não lançar — o loop de polling detecta 'disconnected' e chama marcarDesconectado())
       if (/404/.test(String(err?.message ?? ''))) {
         this.instanceTokens.delete(contaId)
+        return 'disconnected'
       }
       throw err
     }
@@ -277,16 +279,20 @@ export class UazapiManager {
     )
   }
 
-  // Polling de estado a cada 10s
+  // Polling de estado a cada 10s — circuit breaker após 10 erros consecutivos
   private iniciarPolling(contaId: string) {
     if (this.polling.has(contaId)) return
     this.polling.add(contaId)
+
+    const MAX_ERROS = 10
+    let erros = 0
 
     const loop = async () => {
       while (this.polling.has(contaId)) {
         await sleep(10_000)
         try {
           const state = await this.pegarEstado(contaId)
+          erros = 0  // reset no sucesso
 
           if (state === 'connected' && !this.connected.has(contaId)) {
             this.connected.add(contaId)
@@ -312,12 +318,21 @@ export class UazapiManager {
             await this.marcarDesconectado(contaId)
           }
 
-          // Se ainda conectando, tenta buscar QR novamente
           if (state === 'connecting') {
             await this.buscarEGravarQR(contaId)
           }
+
         } catch (err) {
-          logger.error({ contaId, err }, 'uazapi: erro no polling')
+          erros++
+          logger.error({ contaId, err, erros }, 'uazapi: erro no polling')
+
+          if (erros >= MAX_ERROS) {
+            logger.error({ contaId }, 'uazapi: muitos erros consecutivos — parando polling')
+            this.polling.delete(contaId)
+            this.connected.delete(contaId)
+            try { await this.marcarDesconectado(contaId) } catch {}
+            return
+          }
         }
       }
     }

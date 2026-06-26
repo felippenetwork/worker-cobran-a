@@ -163,6 +163,8 @@ async function processarUmaNotificacao(
   }
 
   // ── 5. Enviar com retry ───────────────────────────────────────────────────
+  // Captura janela agora — não no final dos retries, para evitar edge case de virada de hora
+  const janelaNoInicio = dentroDaJanela()
   let ultimoErro: unknown
 
   for (let tentativa = 1; tentativa <= MAX_RETRIES; tentativa++) {
@@ -198,8 +200,8 @@ async function processarUmaNotificacao(
   // ── 6. Todas as tentativas falharam ──────────────────────────────────────
   logger.error({ contaId, notifId: notif.id, ultimoErro }, 'WhatsApp: todas as tentativas falharam')
 
-  if (!dentroDaJanela()) {
-    // Já saímos da janela — reagenda para amanhã às 09h (não descarta)
+  if (!janelaNoInicio) {
+    // Processado fora da janela (loop imediato) — reagenda para amanhã às 09h
     await reagendar(supabase, notif.id)
   } else {
     // Falha dentro da janela (número inválido, bloqueado, etc.) → marca como falhou
