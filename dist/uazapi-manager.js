@@ -156,6 +156,22 @@ export class UazapiManager {
     }
     // ── Reiniciar: sincroniza estado sem desconectar ──────────────────────────────
     async reconectar(contaId) {
+        // Se token não está em memória (ex: worker reiniciou com conta em status desconectado
+        // no banco mas instância ainda ativa no uazapi), recuperar via /instance/all antes
+        // de checar o estado — caso contrário pegarEstado() retorna 'disconnected' sem verificar.
+        if (!this.instanceTokens.has(contaId)) {
+            try {
+                const all = await adminApi('GET', '/instance/all');
+                const inst = all.find((i) => i.name === instName(contaId));
+                if (inst?.token) {
+                    this.instanceTokens.set(contaId, inst.token);
+                    logger.info({ contaId }, 'uazapi: token recuperado via /instance/all no reconectar');
+                }
+            }
+            catch (err) {
+                logger.warn({ contaId, err }, 'uazapi: falha ao recuperar token — tentando conectar()');
+            }
+        }
         // Checar estado real no uazapi antes de qualquer ação destrutiva
         let estadoAtual = 'disconnected';
         try {
