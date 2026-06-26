@@ -48,8 +48,9 @@ export class UazapiManager {
 
   // ── Startup: verifica quais instâncias ainda estão conectadas no uazapi ──────
   async restaurarSessoes() {
+    // Inclui 'conectando': worker pode ter reiniciado durante o processo de conexão
     const { data: conexoes } = await this.supabase
-      .from('conexoes').select('conta_id').eq('status', 'conectado')
+      .from('conexoes').select('conta_id').in('status', ['conectado', 'conectando'])
 
     if (!conexoes?.length) return
 
@@ -75,6 +76,18 @@ export class UazapiManager {
 
       if (inst.status === 'connected') {
         this.connected.add(contaId)
+        // Sincronizar DB — pode estar em 'conectando' se o worker reiniciou durante conexão
+        try {
+          const data   = await instanceApi(inst.token as string, 'GET', '/instance/status')
+          const numero = (data?.status?.jid?.user as string) ?? null
+          const nome   = (data?.instance?.profileName as string) ?? null
+          await this.supabase.from('conexoes').upsert(
+            { conta_id: contaId, status: 'conectado', qr_code: null, comando: null,
+              numero_conectado: numero, device_name: nome,
+              ultima_conexao: new Date().toISOString() },
+            { onConflict: 'conta_id' },
+          )
+        } catch {}
         this.iniciarPolling(contaId)
         logger.info({ contaId }, 'uazapi: sessão restaurada')
       } else {
@@ -149,15 +162,37 @@ export class UazapiManager {
     )
   }
 
-  // ── Reiniciar conexão (gera novo QR) ─────────────────────────────────────────
+  // ── Reiniciar: sincroniza estado sem desconectar ──────────────────────────────
   async reconectar(contaId: string) {
+    // Checar estado real no uazapi antes de qualquer ação destrutiva
+    let estadoAtual: 'connected' | 'disconnected' | 'connecting' = 'disconnected'
+    try { estadoAtual = await this.pegarEstado(contaId) } catch {}
+
+    if (estadoAtual === 'connected') {
+      // Já conectado — apenas sincronizar banco, sem desconectar
+      const token = this.instanceTokens.get(contaId)
+      if (token) {
+        try {
+          const data   = await instanceApi(token, 'GET', '/instance/status')
+          const numero = (data?.status?.jid?.user as string) ?? null
+          const nome   = (data?.instance?.profileName as string) ?? null
+          await this.supabase.from('conexoes').upsert(
+            { conta_id: contaId, status: 'conectado', qr_code: null, comando: null,
+              numero_conectado: numero, device_name: nome,
+              ultima_conexao: new Date().toISOString() },
+            { onConflict: 'conta_id' },
+          )
+        } catch {}
+      }
+      this.connected.add(contaId)
+      this.iniciarPolling(contaId)
+      logger.info({ contaId }, 'uazapi: reiniciar — já conectado, banco sincronizado')
+      return
+    }
+
+    // Não conectado — iniciar nova conexão sem desconectar (preserva sessão se existir)
     this.connected.delete(contaId)
     this.polling.delete(contaId)
-    const token = this.instanceTokens.get(contaId)
-    if (token) {
-      try { await instanceApi(token, 'POST', '/instance/disconnect') } catch {}
-    }
-    await sleep(2_000)
     await this.conectar(contaId)
   }
 

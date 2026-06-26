@@ -30,17 +30,14 @@ async function main() {
 
   logger.info('WhatsApp provider: uazapi')
 
-  // ── Startup: limpar estados inconsistentes ─────────────────────────────────
-  // 'conectando' sem sessão real → desconectado; comandos stale → limpar
-  await supabase.from('conexoes')
-    .update({ status: 'desconectado', qr_code: null, comando: null })
-    .eq('status', 'conectando')
+  // ── Startup: limpar comandos stale ────────────────────────────────────────
+  // Não resetar 'conectando' → restaurarSessoes() verifica o estado real no uazapi
   await supabase.from('conexoes')
     .update({ comando: null })
     .not('comando', 'is', null)
 
-  // ── Baileys: restaurar sessões ──────────────────────────────────────────────
-  logger.info('Restaurando sessões Baileys...')
+  // ── Restaurar sessões uazapi ───────────────────────────────────────────────
+  logger.info('Restaurando sessões uazapi...')
   await manager.restaurarSessoes()
 
   // ── Realtime: receber comandos de conexão ───────────────────────────────────
