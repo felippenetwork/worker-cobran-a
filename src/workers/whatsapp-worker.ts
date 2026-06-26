@@ -48,7 +48,7 @@ export async function processarFilaWhatsApp(
     .select('id, conta_id, parcela_id, cobranca_id, cliente_id, tipo')
     .eq('canal', 'whatsapp')
     .eq('status', 'fila')
-    .not('tipo', 'in', '("pagamento_confirmado","boasvindas")')
+    .not('tipo', 'in', '("pagamento_confirmado","boasvindas","manual")')
     .lte('agendado_para', agora)
     .order('agendado_para', { ascending: true })
     .limit(30)
@@ -207,15 +207,15 @@ async function processarUmaNotificacao(
   }
 }
 
-// ── Loop imediato: pagamento_confirmado e boasvindas — sem typing, poll a cada 3s ──
-// Chamado em paralelo com processarFilaWhatsApp. Não aplica intervalo anti-ban
-// entre contas pois são confirmações transacionais (não marketing).
+// ── Loop imediato: transacionais e disparos manuais — sem janela horária ────
+// Inclui: pagamento_confirmado, boasvindas, manual (botão WhatsApp na parcela).
+// Chamado em paralelo com processarFilaWhatsApp.
 
 export async function processarFilaImediata(
   supabase: SupabaseAdmin,
   manager: IWAManager,
 ) {
-  // Sem restrição de janela — boasvindas e pagamento_confirmado são transacionais
+  // Sem restrição de janela — transacionais e manuais são disparados imediatamente
   const agora = new Date().toISOString()
 
   const { data: pendentes } = await supabase
@@ -223,7 +223,7 @@ export async function processarFilaImediata(
     .select('id, conta_id, parcela_id, cobranca_id, cliente_id, tipo')
     .eq('canal', 'whatsapp')
     .eq('status', 'fila')
-    .in('tipo', ['pagamento_confirmado', 'boasvindas'])
+    .in('tipo', ['pagamento_confirmado', 'boasvindas', 'manual'])
     .lte('agendado_para', agora)
     .order('agendado_para', { ascending: true })
     .limit(10)
