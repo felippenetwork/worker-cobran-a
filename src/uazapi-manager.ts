@@ -297,6 +297,79 @@ export class UazapiManager {
     )
   }
 
+  // Tenta restaurar a sessão automaticamente após queda de conexão.
+  // Retorna 'conectado' se OK, 'conectando' se gerou QR (precisa de scan),
+  // ou 'falhou' se esgotou tentativas.
+  private async tentarReconectarAuto(
+    contaId: string,
+  ): Promise<'conectado' | 'conectando' | 'falhou'> {
+    const MAX_TENTATIVAS  = 3
+    const DELAY_INICIAL   = 3_000   // deixar uazapi processar a queda antes de reconectar
+    const DELAY_CONECTAR  = 8_000   // aguardar sessão estabelecer após /instance/connect
+    const DELAY_TENTATIVA = 20_000  // pausa entre tentativas fracassadas
+
+    await sleep(DELAY_INICIAL)
+
+    for (let i = 1; i <= MAX_TENTATIVAS; i++) {
+      if (!this.polling.has(contaId)) return 'falhou' // desconectado manualmente durante tentativa
+
+      const token = this.instanceTokens.get(contaId)
+      if (!token) return 'falhou'
+
+      logger.info({ contaId, tentativa: i }, 'uazapi: reconexão automática — tentativa')
+
+      try {
+        await instanceApi(token, 'POST', '/instance/connect')
+      } catch (err) {
+        logger.warn({ contaId, tentativa: i, err }, 'uazapi: /instance/connect falhou (não crítico)')
+      }
+
+      await sleep(DELAY_CONECTAR)
+      if (!this.polling.has(contaId)) return 'falhou'
+
+      let state: 'connected' | 'disconnected' | 'connecting' = 'disconnected'
+      try { state = await this.pegarEstado(contaId) } catch {}
+
+      if (state === 'connected') {
+        this.connected.add(contaId)
+        try {
+          const data   = await instanceApi(token, 'GET', '/instance/status')
+          const numero = (data?.status?.jid?.user as string) ?? null
+          const nome   = (data?.instance?.profileName as string) ?? null
+          await this.supabase.from('conexoes').upsert(
+            { conta_id: contaId, status: 'conectado', qr_code: null, comando: null,
+              numero_conectado: numero, device_name: nome,
+              ultima_conexao: new Date().toISOString() },
+            { onConflict: 'conta_id' },
+          )
+        } catch {}
+        logger.info({ contaId, tentativa: i }, 'uazapi: reconexão automática bem-sucedida')
+        return 'conectado'
+      }
+
+      if (state === 'connecting') {
+        // Sessão expirou — gerou novo QR, aguardar scan do usuário
+        await this.buscarEGravarQR(contaId)
+        try {
+          await this.supabase.from('conexoes').upsert(
+            { conta_id: contaId, status: 'conectando', comando: null },
+            { onConflict: 'conta_id' },
+          )
+        } catch {}
+        logger.info({ contaId }, 'uazapi: reconexão automática gerou QR — aguardando scan do usuário')
+        return 'conectando'
+      }
+
+      if (i < MAX_TENTATIVAS) {
+        logger.info({ contaId, tentativa: i }, 'uazapi: ainda desconectado — aguardando próxima tentativa')
+        await sleep(DELAY_TENTATIVA)
+      }
+    }
+
+    logger.warn({ contaId }, 'uazapi: reconexão automática esgotou todas as tentativas')
+    return 'falhou'
+  }
+
   // Polling de estado a cada 10s — circuit breaker após 10 erros consecutivos
   private iniciarPolling(contaId: string) {
     if (this.polling.has(contaId)) return
@@ -332,8 +405,9 @@ export class UazapiManager {
 
           if (state !== 'connected' && this.connected.has(contaId)) {
             this.connected.delete(contaId)
-            logger.warn({ contaId }, 'uazapi: perdeu conexão')
-            await this.marcarDesconectado(contaId)
+            logger.warn({ contaId }, 'uazapi: perdeu conexão — iniciando reconexão automática')
+            const resultado = await this.tentarReconectarAuto(contaId)
+            if (resultado === 'falhou') await this.marcarDesconectado(contaId)
           }
 
           if (state === 'connecting') {
