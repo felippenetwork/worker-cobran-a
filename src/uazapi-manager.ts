@@ -297,6 +297,82 @@ export class UazapiManager {
     )
   }
 
+  // Varredura periódica: sincroniza estado real do uazapi com o banco.
+  // Chamada a cada 5 min pelo index.ts. Só age sobre contas SEM polling ativo —
+  // contas com polling gerenciam o próprio estado pelo loop de 10s.
+  async sincronizarConexoes() {
+    const { data: conexoes } = await this.supabase
+      .from('conexoes').select('conta_id')
+
+    if (!conexoes?.length) return
+
+    let allInstances: any[] = []
+    try {
+      allInstances = await adminApi('GET', '/instance/all')
+    } catch (err) {
+      logger.error({ err }, 'uazapi: sincronizarConexoes — falha ao listar instâncias')
+      return
+    }
+
+    for (const row of conexoes) {
+      const contaId = row.conta_id as string
+
+      // Conta com polling ativo: o loop de 10s já cuida do estado — não interferir
+      if (this.polling.has(contaId)) continue
+
+      const name = instName(contaId)
+      const inst = allInstances.find((i: any) => i.name === name)
+
+      if (!inst) {
+        // Instância não existe no uazapi — garantir DB consistente
+        if (this.connected.has(contaId)) {
+          this.connected.delete(contaId)
+          await this.marcarDesconectado(contaId)
+        }
+        continue
+      }
+
+      // Sempre atualizar token em memória (pode ter mudado após restart do uazapi)
+      this.instanceTokens.set(contaId, inst.token as string)
+
+      if (inst.status === 'connected') {
+        // Conectado no uazapi mas polling não está rodando → restaurar
+        this.connected.add(contaId)
+        try {
+          const data   = await instanceApi(inst.token as string, 'GET', '/instance/status')
+          const numero = (data?.status?.jid?.user as string) ?? null
+          const nome   = (data?.instance?.profileName as string) ?? null
+          await this.supabase.from('conexoes').upsert(
+            { conta_id: contaId, status: 'conectado', qr_code: null, comando: null,
+              numero_conectado: numero, device_name: nome,
+              ultima_conexao: new Date().toISOString() },
+            { onConflict: 'conta_id' },
+          )
+        } catch {}
+        this.iniciarPolling(contaId)
+        logger.info({ contaId }, 'uazapi: sincronizarConexoes — sessão restaurada, polling reiniciado')
+
+      } else if (inst.status === 'connecting') {
+        // Gerou QR mas ninguém escaneou — atualizar QR no banco e sinalizar ao usuário
+        await this.buscarEGravarQR(contaId)
+        try {
+          await this.supabase.from('conexoes').upsert(
+            { conta_id: contaId, status: 'conectando', comando: null },
+            { onConflict: 'conta_id' },
+          )
+        } catch {}
+        this.iniciarPolling(contaId)
+        logger.info({ contaId }, 'uazapi: sincronizarConexoes — QR atualizado')
+
+      } else {
+        // Desconectado no uazapi e sem polling → garantir DB consistente
+        if (this.connected.has(contaId)) this.connected.delete(contaId)
+        await this.marcarDesconectado(contaId)
+        logger.info({ contaId }, 'uazapi: sincronizarConexoes — marcado desconectado')
+      }
+    }
+  }
+
   // Tenta restaurar a sessão automaticamente após queda de conexão.
   // Retorna 'conectado' se OK, 'conectando' se gerou QR (precisa de scan),
   // ou 'falhou' se esgotou tentativas.
