@@ -50,7 +50,7 @@ async function processarUmEmail(supabase, notif) {
         .select('template_email, assunto_email')
         .eq('conta_id', contaId)
         .eq('tipo', notif.tipo)
-        .single();
+        .maybeSingle();
     const template = cfg?.template_email;
     const assunto = cfg?.assunto_email;
     if (!template || !assunto) {
@@ -85,9 +85,13 @@ async function processarUmEmail(supabase, notif) {
         await supabase.from('notificacoes_enviadas').update({ status: 'falhou' }).eq('id', notif.id);
         return;
     }
+    const toAddress = cliente.email;
+    if (!toAddress) {
+        await supabase.from('notificacoes_enviadas').update({ status: 'cancelado' }).eq('id', notif.id);
+        return;
+    }
     const fromName = remConfig?.from_name ?? localPart;
     const fromAddress = `${fromName} <${localPart}@${dominio}>`;
-    const toAddress = cliente.email;
     const unsubUrl = `${SITE_URL}/descadastrar/${notif.cliente_id}`;
     // Resolver variáveis
     let conteudoFinal;

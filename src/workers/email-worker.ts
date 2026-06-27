@@ -64,7 +64,7 @@ async function processarUmEmail(
     .select('template_email, assunto_email')
     .eq('conta_id', contaId)
     .eq('tipo', notif.tipo)
-    .single()
+    .maybeSingle()
 
   const template = (cfg as any)?.template_email
   const assunto  = (cfg as any)?.assunto_email
@@ -105,9 +105,14 @@ async function processarUmEmail(
     return
   }
 
+  const toAddress = (cliente as any).email as string | null
+  if (!toAddress) {
+    await supabase.from('notificacoes_enviadas').update({ status: 'cancelado' }).eq('id', notif.id)
+    return
+  }
+
   const fromName    = (remConfig as any)?.from_name ?? localPart
   const fromAddress = `${fromName} <${localPart}@${dominio}>`
-  const toAddress   = (cliente as any).email
   const unsubUrl    = `${SITE_URL}/descadastrar/${notif.cliente_id}`
 
   // Resolver variáveis
