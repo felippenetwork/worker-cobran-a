@@ -48,9 +48,11 @@ export class UazapiManager {
 
   // ── Startup: verifica quais instâncias ainda estão conectadas no uazapi ──────
   async restaurarSessoes() {
-    // Inclui 'conectando': worker pode ter reiniciado durante o processo de conexão
+    // Busca TODAS as contas com linha em conexoes — não filtra por status no banco
+    // porque o banco pode mostrar 'desconectado' mesmo que o uazapi ainda esteja ativo
+    // (ex: worker reiniciou após circuit-breaker). A fonte de verdade é o uazapi.
     const { data: conexoes } = await this.supabase
-      .from('conexoes').select('conta_id').in('status', ['conectado', 'conectando'])
+      .from('conexoes').select('conta_id')
 
     if (!conexoes?.length) return
 
