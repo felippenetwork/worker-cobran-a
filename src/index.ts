@@ -16,6 +16,7 @@ const logger = pino({ level: process.env.LOG_LEVEL ?? 'warn' })
 
 // Intervalos de polling
 const SCHEDULER_INTERVAL_MS   = 60 * 60 * 1000  // 1h entre execuções do scheduler
+const DPGP_TICK_INTERVAL_MS   = 60_000           // 1min — disparo automático DPGP
 const SYNC_CONEXOES_INTERVAL_MS = 5 * 60 * 1000 // 5min — varredura global de estado uazapi
 const WA_POLL_INTERVAL_MS     = 15_000           // 15s entre ciclos do worker WA
 const WA_IMEDIATO_INTERVAL_MS = 3_000            // 3s — pagamento_confirmado e boasvindas
@@ -133,6 +134,21 @@ async function main() {
       try { await manager.sincronizarConexoes() }
       catch (err) { logger.error({ err }, 'Sync conexões: erro') }
     }
+  }
+
+  // ── Ticker DPGP: chama o agendador de disparos em grupo a cada 1 min ─────────
+  const dpgpCronUrl = process.env.DPGP_CRON_URL
+  if (dpgpCronUrl) {
+    const loopDpgp = async () => {
+      while (true) {
+        await sleep(DPGP_TICK_INTERVAL_MS)
+        try { await fetch(dpgpCronUrl) } catch { /* silencioso — não afeta este worker */ }
+      }
+    }
+    loopDpgp()
+    logger.info('DPGP ticker iniciado (1 min).')
+  } else {
+    logger.warn('DPGP_CRON_URL não definida — ticker desativado.')
   }
 
   loopComandos()
